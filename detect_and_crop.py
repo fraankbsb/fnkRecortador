@@ -93,13 +93,7 @@ except ImportError:
 import argparse
 import json, math
 
-# Localizacao portavel: fnkPerfis fica ao lado deste projeto (mesmo pai
-# fnkSocialMidia), entao computamos a partir do proprio script - funciona
-# em qualquer PC/disco, nunca fixa uma letra de drive.
-FNKPERFIS_DIR = Path(_os.environ.get("FNKPERFIS_DIR") or (Path(__file__).resolve().parent.parent / "fnkPerfis"))
-PASTA_ENTRADA = "DONWLOADS"
-PASTA_SAIDA   = "VIDEOS RECORTADOS"
-PASTA_USADOS  = "VIDEOS USADOS"
+PASTA_SAIDA    = "VIDEOS RECORTADOS"  # usado pelo modo --pasta/--destino (detect_and_crop.bat)
 PADDING_PADRAO = 2
 
 FFMPEG_BIN = "ffmpeg"  # atualizado por garantir_ffmpeg() se so for achado fora do PATH
@@ -594,118 +588,6 @@ def _ler_versao_local():
 APP_VERSAO = _ler_versao_local()
 
 
-def _cabecalho(nicho="", perfil=""):
-    print()
-    print("═" * 60)
-    print(f"  🎬 fnkRecortador  v{APP_VERSAO}  ·  Corte automatico + classificacao")
-    if nicho:  print(f"  Nicho  : {nicho}")
-    if perfil: print(f"  Perfil : {perfil}")
-    print("═" * 60)
-
-
-def _contar_videos(pasta: Path):
-    if not pasta.exists():
-        return 0
-    return sum(1 for p in pasta.iterdir()
-               if p.is_file() and p.suffix.lower() in VIDEO_EXT)
-
-
-def _menu_nicho():
-    nichos = sorted([p for p in FNKPERFIS_DIR.iterdir() if p.is_dir()]) if FNKPERFIS_DIR.exists() else []
-    if not nichos:
-        print(f"\n  ERRO: Nenhum nicho em {FNKPERFIS_DIR}")
-        input("  Enter para fechar...")
-        return None
-    while True:
-        _cabecalho()
-        print()
-        print("  Selecione o NICHO:")
-        print()
-        for i, n in enumerate(nichos, 1):
-            print(f"    {i} - {n.name}")
-        print()
-        print("    0 - Sair")
-        print()
-        esc = input("  Digite o numero: ").strip()
-        if esc == "0": return None
-        if esc.isdigit() and 1 <= int(esc) <= len(nichos):
-            return nichos[int(esc) - 1]
-        print("  Opcao invalida.")
-
-
-def _menu_perfil(nicho_path: Path):
-    perfis = sorted([p for p in nicho_path.iterdir() if p.is_dir()])
-    if not perfis:
-        print(f"\n  Nenhum perfil em {nicho_path.name}")
-        input("  Enter para voltar...")
-        return None
-    while True:
-        _cabecalho(nicho=nicho_path.name)
-        print()
-        print("  Selecione os PERFIS (numeros separados por virgula ou 'todos'):")
-        print()
-        for i, p in enumerate(perfis, 1):
-            qtd = _contar_videos(p / PASTA_ENTRADA)
-            status = f"{qtd} video(s) em DONWLOADS" if qtd > 0 else "DONWLOADS vazio"
-            print(f"    {i} - {p.name}  [{status}]")
-        print()
-        print("    0 - Voltar")
-        print()
-        esc = input("  Escolha: ").strip().lower()
-        if esc == "0": return None
-        if esc == "todos": return perfis
-        nums = [x.strip() for x in esc.split(",")]
-        sel, ok = [], True
-        for n in nums:
-            if n.isdigit() and 1 <= int(n) <= len(perfis):
-                p = perfis[int(n) - 1]
-                if p not in sel: sel.append(p)
-            else:
-                print(f"  Invalido: {n}"); ok = False; break
-        if ok and sel: return sel
-        input("  Enter para tentar novamente...")
-
-
-def _menu_acao(nicho_path, perfis):
-    sem_blur = OCR_DISPONIVEL is False
-    while True:
-        _cabecalho(nicho=nicho_path.name, perfil=", ".join(p.name for p in perfis))
-        print()
-        print("  Entrada : DONWLOADS\\ (videos soltos)")
-        print("  Saida   : VIDEOS RECORTADOS\\<perfil>\\<ratio>\\")
-        print("  Usados  : VIDEOS USADOS\\")
-        print(f"  Blur @  : {'SIM (Tesseract OK)' if OCR_DISPONIVEL else 'NAO (Tesseract nao encontrado)'}")
-        print()
-        print("    1 - Processar agora")
-        print("    2 - Testar sem executar (dry-run)")
-        print("    3 - Voltar")
-        print("    0 - Sair")
-        print()
-        esc = input("  Escolha: ").strip()
-        if esc == "0": return "sair"
-        if esc == "3": return "voltar"
-        if esc in ("1", "2"):
-            return {"dry_run": esc == "2", "sem_blur": sem_blur}
-        print("  Opcao invalida.")
-
-
-def _menu_modo():
-    while True:
-        _cabecalho()
-        print()
-        print("  Como deseja selecionar os videos?")
-        print()
-        disponivel = FNKPERFIS_DIR.exists()
-        print(f"    1 - Usar perfis (fnkPerfis)" + ("" if disponivel else "  [pasta nao encontrada]"))
-        print("    2 - Selecionar videos e pasta de saida manualmente")
-        print("    0 - Sair")
-        print()
-        esc = input("  Escolha: ").strip()
-        if esc == "0": return None
-        if esc in ("1", "2"): return esc
-        print("  Opcao invalida.")
-
-
 class _RedirecionadorLog:
     """Stream-like: repassa print()s do processar_video para a caixa de log da GUI."""
     def __init__(self, callback):
@@ -719,7 +601,7 @@ class _RedirecionadorLog:
         pass
 
 
-class _JanelaManual:
+class _JanelaPrincipal:
     """GUI de pasta de entrada / pasta de saida / processar / parar, no
     mesmo layout do fnkLimpezaQualidade - Processador de Videos."""
 
@@ -734,7 +616,7 @@ class _JanelaManual:
         self.blur_username = blur_username
         self.parar_evento = None  # criado a cada processamento (threading.Event)
 
-        root.title("fnkRecortador — Processador de Vídeos")
+        root.title(f"fnkRecortador v{APP_VERSAO} — Processador de Vídeos")
         root.geometry("820x560")
         root.minsize(600, 400)
 
@@ -859,10 +741,10 @@ class _JanelaManual:
         self.btn_parar.configure(state="disabled")
 
 
-def _fluxo_manual(padding, blur_username):
+def _abrir_gui(padding, blur_username):
     import tkinter as tk
-    janela = tk.Toplevel() if tk._default_root else tk.Tk()
-    _JanelaManual(janela, padding, blur_username)
+    janela = tk.Tk()
+    _JanelaPrincipal(janela, padding, blur_username)
     janela.mainloop()
 
 
@@ -948,75 +830,9 @@ def main():
         input("\n  Pressione Enter para fechar...")
         return
 
-    # Modo menu interativo
-    while True:
-        modo = _menu_modo()
-        if modo is None:
-            print("\n  Ate logo!")
-            return
-
-        if modo == "2":
-            _fluxo_manual(args.padding, not args.sem_blur)
-            continue
-
-        # modo == "1": fluxo por perfis (fnkPerfis)
-        if not FNKPERFIS_DIR.exists():
-            print(f"\n  ERRO: {FNKPERFIS_DIR} nao encontrada.")
-            input("  Enter para voltar...")
-            continue
-
-        nicho_path = _menu_nicho()
-        if nicho_path is None:
-            continue
-
-        while True:
-            perfis = _menu_perfil(nicho_path)
-            if perfis is None:
-                break
-
-            resultado = _menu_acao(nicho_path, perfis)
-            if resultado == "sair":   return
-            if resultado == "voltar": continue
-
-            dry_run  = resultado["dry_run"]
-            sem_blur = resultado["sem_blur"]
-            ok_total = 0
-            err_total = 0
-
-            for perfil_path in perfis:
-                pasta_entrada = perfil_path / PASTA_ENTRADA
-                pasta_saida   = perfil_path / PASTA_SAIDA / perfil_path.name
-                pasta_usados  = perfil_path / PASTA_USADOS
-
-                pasta_saida.mkdir(parents=True, exist_ok=True)
-                pasta_usados.mkdir(parents=True, exist_ok=True)
-
-                videos = sorted(f for f in pasta_entrada.iterdir()
-                                 if f.is_file() and f.suffix.lower() in VIDEO_EXT) if pasta_entrada.exists() else []
-
-                if not videos:
-                    print(f"\n  [{perfil_path.name}] Nenhum video em DONWLOADS, pulando.")
-                    continue
-
-                print(f"\n{'═'*60}")
-                print(f"  PERFIL : {perfil_path.name}")
-                print(f"  Videos : {len(videos)}")
-                print(f"  Blur @ : {'SIM' if not sem_blur else 'NAO'}")
-                if dry_run: print(f"  Modo   : DRY-RUN")
-                print(f"{'═'*60}")
-
-                for video in videos:
-                    if processar_video(video, pasta_saida, pasta_usados, args.padding, dry_run, not sem_blur):
-                        ok_total += 1
-                    else:
-                        err_total += 1
-
-            print(f"\n{'═'*60}")
-            print(f"  CONCLUIDO: {ok_total} OK  |  {err_total} erros")
-            print(f"{'═'*60}")
-            continuar = input("\n  Processar mais perfis neste nicho? (S/N): ").strip().upper()
-            if continuar != "S":
-                break
+    # Sem argumentos (launcher, duplo-clique, etc.) - abre direto na GUI,
+    # sem menu de console na frente.
+    _abrir_gui(args.padding, not args.sem_blur)
 
 
 if __name__ == "__main__":
