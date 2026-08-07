@@ -716,6 +716,10 @@ class _JanelaPrincipal:
 
     def _processar_thread(self, videos, pasta_saida):
         pasta_saida.mkdir(parents=True, exist_ok=True)
+        # As 3 pastas de destino existem sempre, independente de quais
+        # ratios aparecerem neste lote especifico.
+        for _ratio in TARGET_DIMS:
+            (pasta_saida / _ratio).mkdir(parents=True, exist_ok=True)
         antigo_stdout = sys.stdout
         sys.stdout = _RedirecionadorLog(self._log_msg)
         ok, erros = 0, 0
@@ -809,6 +813,8 @@ def main():
             return
 
         pasta_saida_base = pasta_perfil / PASTA_SAIDA / pasta_perfil.name
+        for _ratio in TARGET_DIMS:
+            (pasta_saida_base / _ratio).mkdir(parents=True, exist_ok=True)
 
         sep = "═" * 60
         print(f"\n{sep}")
