@@ -689,6 +689,92 @@ def _menu_acao(nicho_path, perfis):
         print("  Opcao invalida.")
 
 
+def _menu_modo():
+    while True:
+        _cabecalho()
+        print()
+        print("  Como deseja selecionar os videos?")
+        print()
+        disponivel = FNKPERFIS_DIR.exists()
+        print(f"    1 - Usar perfis (fnkPerfis)" + ("" if disponivel else "  [pasta nao encontrada]"))
+        print("    2 - Selecionar videos e pasta de saida manualmente")
+        print("    0 - Sair")
+        print()
+        esc = input("  Escolha: ").strip()
+        if esc == "0": return None
+        if esc in ("1", "2"): return esc
+        print("  Opcao invalida.")
+
+
+def _selecionar_videos_manual():
+    """Abre dialogos nativos do Windows: escolha varios arquivos de video
+    (Ctrl ou Shift para selecionar quantos quiser) e a pasta de SAIDA onde
+    os cortes vao ser salvos (organizados em <saida>/<ratio>/).
+    Retorna (lista_de_videos, pasta_saida) ou (None, None) se cancelado."""
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    root.withdraw()
+    root.wm_attributes("-topmost", 1)
+
+    extensoes = " ".join(f"*{e}" for e in sorted(VIDEO_EXT))
+    caminhos = filedialog.askopenfilenames(
+        title="Selecione os videos para recortar (Ctrl ou Shift para varios)",
+        filetypes=[("Videos", extensoes), ("Todos os arquivos", "*.*")],
+    )
+    if not caminhos:
+        root.destroy()
+        return None, None
+
+    pasta_saida = filedialog.askdirectory(
+        title="Selecione a pasta de SAIDA dos videos recortados",
+    )
+    root.destroy()
+    if not pasta_saida:
+        return None, None
+
+    return [Path(c) for c in caminhos], Path(pasta_saida)
+
+
+def _fluxo_manual(padding, blur_username):
+    videos, pasta_saida = _selecionar_videos_manual()
+    if not videos or not pasta_saida:
+        print("\n  Selecao cancelada.")
+        input("  Enter para voltar...")
+        return
+
+    pasta_saida.mkdir(parents=True, exist_ok=True)
+
+    _cabecalho()
+    print()
+    print(f"  Videos selecionados : {len(videos)}")
+    print(f"  Pasta de saida      : {pasta_saida}")
+    print(f"  Blur @              : {'SIM (Tesseract OK)' if OCR_DISPONIVEL else 'NAO (Tesseract nao encontrado)'}")
+    print()
+    print("    1 - Processar agora")
+    print("    2 - Testar sem executar (dry-run)")
+    print("    0 - Cancelar")
+    print()
+    esc = input("  Escolha: ").strip()
+    if esc not in ("1", "2"):
+        return
+    dry_run = esc == "2"
+
+    ok_total = 0
+    err_total = 0
+    for video in videos:
+        if processar_video(video, pasta_saida, pasta_saida, padding, dry_run, blur_username):
+            ok_total += 1
+        else:
+            err_total += 1
+
+    print(f"\n{'═'*60}")
+    print(f"  CONCLUIDO: {ok_total} OK  |  {err_total} erros")
+    print(f"{'═'*60}")
+    input("\n  Enter para voltar...")
+
+
 def main():
     global OCR_DISPONIVEL
 
@@ -772,16 +858,25 @@ def main():
         return
 
     # Modo menu interativo
-    if not FNKPERFIS_DIR.exists():
-        print(f"\n  ERRO: {FNKPERFIS_DIR} nao encontrada.")
-        input("  Enter para fechar...")
-        return
-
     while True:
+        modo = _menu_modo()
+        if modo is None:
+            print("\n  Ate logo!")
+            return
+
+        if modo == "2":
+            _fluxo_manual(args.padding, not args.sem_blur)
+            continue
+
+        # modo == "1": fluxo por perfis (fnkPerfis)
+        if not FNKPERFIS_DIR.exists():
+            print(f"\n  ERRO: {FNKPERFIS_DIR} nao encontrada.")
+            input("  Enter para voltar...")
+            continue
+
         nicho_path = _menu_nicho()
         if nicho_path is None:
-            print("\n  Ate logo!")
-            break
+            continue
 
         while True:
             perfis = _menu_perfil(nicho_path)
