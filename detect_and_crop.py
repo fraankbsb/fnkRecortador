@@ -706,73 +706,164 @@ def _menu_modo():
         print("  Opcao invalida.")
 
 
-def _selecionar_videos_manual():
-    """Abre dialogos nativos do Windows: escolha varios arquivos de video
-    (Ctrl ou Shift para selecionar quantos quiser) e a pasta de SAIDA onde
-    os cortes vao ser salvos (organizados em <saida>/<ratio>/).
-    Retorna (lista_de_videos, pasta_saida) ou (None, None) se cancelado."""
-    import tkinter as tk
-    from tkinter import filedialog
+class _RedirecionadorLog:
+    """Stream-like: repassa print()s do processar_video para a caixa de log da GUI."""
+    def __init__(self, callback):
+        self.callback = callback
 
-    root = tk.Tk()
-    root.withdraw()
-    root.wm_attributes("-topmost", 1)
+    def write(self, texto):
+        if texto:
+            self.callback(texto)
 
-    extensoes = " ".join(f"*{e}" for e in sorted(VIDEO_EXT))
-    caminhos = filedialog.askopenfilenames(
-        title="Selecione os videos para recortar (Ctrl ou Shift para varios)",
-        filetypes=[("Videos", extensoes), ("Todos os arquivos", "*.*")],
-    )
-    if not caminhos:
-        root.destroy()
-        return None, None
+    def flush(self):
+        pass
 
-    pasta_saida = filedialog.askdirectory(
-        title="Selecione a pasta de SAIDA dos videos recortados",
-    )
-    root.destroy()
-    if not pasta_saida:
-        return None, None
 
-    return [Path(c) for c in caminhos], Path(pasta_saida)
+class _JanelaManual:
+    """GUI de pasta de entrada / pasta de saida / processar / parar, no
+    mesmo layout do fnkLimpezaQualidade - Processador de Videos."""
+
+    def __init__(self, root, padding, blur_username):
+        import tkinter as tk
+        from tkinter import ttk
+        self._tk = tk
+        self._ttk = ttk
+
+        self.root = root
+        self.padding = padding
+        self.blur_username = blur_username
+        self.parar_evento = None  # criado a cada processamento (threading.Event)
+
+        root.title("fnkRecortador — Processador de Vídeos")
+        root.geometry("820x560")
+        root.minsize(600, 400)
+
+        frm = tk.Frame(root, padx=12, pady=10)
+        frm.pack(fill="both", expand=True)
+        frm.columnconfigure(0, weight=1)
+        frm.rowconfigure(7, weight=1)
+
+        self.pasta_entrada = tk.StringVar()
+        self.pasta_saida = tk.StringVar()
+
+        tk.Label(frm, text="Pasta de entrada (vídeos sem tratamento):", anchor="w").grid(
+            row=0, column=0, columnspan=2, sticky="w")
+        tk.Entry(frm, textvariable=self.pasta_entrada, state="readonly").grid(
+            row=1, column=0, sticky="ew", padx=(0, 8))
+        tk.Button(frm, text="Procurar...", command=self._procurar_entrada).grid(row=1, column=1)
+
+        tk.Label(frm, text="Pasta de saída (vídeos tratados):", anchor="w").grid(
+            row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        tk.Entry(frm, textvariable=self.pasta_saida, state="readonly").grid(
+            row=3, column=0, sticky="ew", padx=(0, 8))
+        tk.Button(frm, text="Procurar...", command=self._procurar_saida).grid(row=3, column=1)
+
+        botoes = tk.Frame(frm)
+        botoes.grid(row=4, column=0, columnspan=2, sticky="w", pady=12)
+        self.btn_processar = tk.Button(
+            botoes, text="PROCESSAR", bg="#2f6fed", fg="white",
+            font=("Segoe UI", 9, "bold"), padx=10, command=self._iniciar,
+        )
+        self.btn_processar.pack(side="left")
+        self.btn_parar = tk.Button(botoes, text="PARAR", state="disabled", command=self._parar)
+        self.btn_parar.pack(side="left", padx=(8, 0))
+
+        self.barra = ttk.Progressbar(frm, mode="determinate")
+        self.barra.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+
+        self.status = tk.StringVar(value="Pronto.")
+        tk.Label(frm, textvariable=self.status, anchor="w").grid(row=6, column=0, columnspan=2, sticky="w")
+
+        from tkinter import scrolledtext
+        self.log = scrolledtext.ScrolledText(frm, state="disabled", font=("Consolas", 9))
+        self.log.grid(row=7, column=0, columnspan=2, sticky="nsew", pady=(6, 0))
+
+    def _procurar_entrada(self):
+        from tkinter import filedialog
+        p = filedialog.askdirectory(title="Selecione a pasta de ENTRADA (vídeos sem tratamento)")
+        if p:
+            self.pasta_entrada.set(p)
+
+    def _procurar_saida(self):
+        from tkinter import filedialog
+        p = filedialog.askdirectory(title="Selecione a pasta de SAÍDA (vídeos tratados)")
+        if p:
+            self.pasta_saida.set(p)
+
+    def _log_msg(self, msg):
+        def _escrever():
+            self.log.configure(state="normal")
+            self.log.insert("end", msg)
+            self.log.see("end")
+            self.log.configure(state="disabled")
+        self.root.after(0, _escrever)
+
+    def _atualizar_status(self, texto):
+        self.root.after(0, lambda: self.status.set(texto))
+
+    def _parar(self):
+        if self.parar_evento:
+            self.parar_evento.set()
+        self.status.set("Parando após o vídeo atual...")
+
+    def _iniciar(self):
+        from tkinter import messagebox
+        entrada = self.pasta_entrada.get()
+        saida = self.pasta_saida.get()
+        if not entrada or not saida:
+            messagebox.showwarning("fnkRecortador", "Selecione as duas pastas antes de processar.")
+            return
+
+        pasta_entrada = Path(entrada)
+        videos = sorted(f for f in pasta_entrada.iterdir()
+                         if f.is_file() and f.suffix.lower() in VIDEO_EXT) if pasta_entrada.exists() else []
+        if not videos:
+            messagebox.showwarning("fnkRecortador", "Nenhum vídeo encontrado na pasta de entrada.")
+            return
+
+        import threading
+        self.parar_evento = threading.Event()
+        self.btn_processar.configure(state="disabled")
+        self.btn_parar.configure(state="normal")
+        self.barra.configure(maximum=len(videos), value=0)
+        self.log.configure(state="normal")
+        self.log.delete("1.0", "end")
+        self.log.configure(state="disabled")
+
+        threading.Thread(target=self._processar_thread, args=(videos, Path(saida)), daemon=True).start()
+
+    def _processar_thread(self, videos, pasta_saida):
+        pasta_saida.mkdir(parents=True, exist_ok=True)
+        antigo_stdout = sys.stdout
+        sys.stdout = _RedirecionadorLog(self._log_msg)
+        ok, erros = 0, 0
+        try:
+            for i, video in enumerate(videos, 1):
+                if self.parar_evento.is_set():
+                    self._atualizar_status(f"Parado pelo usuário ({i - 1}/{len(videos)} processados).")
+                    break
+                self._atualizar_status(f"Processando {i}/{len(videos)}: {video.name}")
+                if processar_video(video, pasta_saida, pasta_saida, self.padding, False, self.blur_username):
+                    ok += 1
+                else:
+                    erros += 1
+                self.root.after(0, lambda v=i: self.barra.configure(value=v))
+            else:
+                self._atualizar_status(f"Concluído: {ok} OK, {erros} erro(s).")
+        finally:
+            sys.stdout = antigo_stdout
+            self.root.after(0, self._finalizar)
+
+    def _finalizar(self):
+        self.btn_processar.configure(state="normal")
+        self.btn_parar.configure(state="disabled")
 
 
 def _fluxo_manual(padding, blur_username):
-    videos, pasta_saida = _selecionar_videos_manual()
-    if not videos or not pasta_saida:
-        print("\n  Selecao cancelada.")
-        input("  Enter para voltar...")
-        return
-
-    pasta_saida.mkdir(parents=True, exist_ok=True)
-
-    _cabecalho()
-    print()
-    print(f"  Videos selecionados : {len(videos)}")
-    print(f"  Pasta de saida      : {pasta_saida}")
-    print(f"  Blur @              : {'SIM (Tesseract OK)' if OCR_DISPONIVEL else 'NAO (Tesseract nao encontrado)'}")
-    print()
-    print("    1 - Processar agora")
-    print("    2 - Testar sem executar (dry-run)")
-    print("    0 - Cancelar")
-    print()
-    esc = input("  Escolha: ").strip()
-    if esc not in ("1", "2"):
-        return
-    dry_run = esc == "2"
-
-    ok_total = 0
-    err_total = 0
-    for video in videos:
-        if processar_video(video, pasta_saida, pasta_saida, padding, dry_run, blur_username):
-            ok_total += 1
-        else:
-            err_total += 1
-
-    print(f"\n{'═'*60}")
-    print(f"  CONCLUIDO: {ok_total} OK  |  {err_total} erros")
-    print(f"{'═'*60}")
-    input("\n  Enter para voltar...")
+    import tkinter as tk
+    janela = tk.Toplevel() if tk._default_root else tk.Tk()
+    _JanelaManual(janela, padding, blur_username)
+    janela.mainloop()
 
 
 def main():
