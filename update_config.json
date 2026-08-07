@@ -1,0 +1,5 @@
+{
+  "repo": "fraankbsb/fnkRecortador",
+  "entry_point": "detect_and_crop.py",
+  "app_title": "fnkRecortador"
+}

@@ -1,0 +1,28 @@
+# Conteudo real do usuario - NUNCA vai pro repo (videos baixados/processados)
+Fitness/
+**/DONWLOADS/
+**/VIDEOS RECORTADOS/
+**/VIDEOS CORTADOS/
+**/VIDEOS USADOS/
+**/VIDEOS ORIGINAIS/
+
+# Segredos / credenciais
+cookies/*
+!cookies/.gitkeep
+*.env
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Build do launcher (PyInstaller)
+build/
+dist/
+*.spec
+
+# Artefatos de release (gerados pelo publish.py, nao versionados)
+payload_v*.zip
+launcher_setup.zip
+launcher.exe
